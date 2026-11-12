@@ -70,18 +70,20 @@ jobs:
           ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
           pmbootstrap --version
 
-      - name: Initialize pmbootstrap on edge (official master)
+      - name: Initialize pmbootstrap on edge (official main)
         run: |
-          echo -e '\n\n' | pmbootstrap init || true
+          printf '\n%.0s' {1..25} | pmbootstrap init || true
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git checkout master
-          git pull origin master
+          git checkout main
+          git pull origin main
+          pmbootstrap config channel edge
           pmbootstrap config device xiaomi-pipa
           pmbootstrap config kernel "${PANEL}"
           pmbootstrap config user user
           pmbootstrap config systemd default
           pmbootstrap config jobs "$(nproc)"
           pmbootstrap status
+
 
       - name: Build KDE Plasma Desktop
         if: env.SELECTED_UI == 'all' || env.SELECTED_UI == 'plasma-desktop'
