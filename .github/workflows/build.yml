@@ -72,15 +72,14 @@ jobs:
 
       - name: Initialize pmbootstrap on edge (official main)
         run: |
-          printf '\n%.0s' {1..25} | pmbootstrap init || true
+          printf '\n%.0s' {1..25} | pmbootstrap init
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
           git checkout main
           git pull origin main
-          pmbootstrap config channel edge
           pmbootstrap config device xiaomi-pipa
           pmbootstrap config kernel "${PANEL}"
           pmbootstrap config user user
-          pmbootstrap config systemd default
+          pmbootstrap config service_manager default
           pmbootstrap config jobs "$(nproc)"
           pmbootstrap status
 
