@@ -141,3 +141,7 @@ jobs:
             out/u-boot-xiaomi-pipa.img
             out/rootfs-xiaomi-pipa-${{ env.PANEL }}-${{ env.SELECTED_UI }}.img
           retention-days: 7
+
+      - name: Show pmbootstrap log on failure
+        if: failure()
+        run: cat ~/.local/var/pmbootstrap/log.txt || true
