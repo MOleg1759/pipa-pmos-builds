@@ -1,31 +1,67 @@
-name: Xiaomi Pad 6 postmarketOS
+name: Xiaomi Pad 6 postmarketOS (edge)
+
 on:
-  push: # Build when push
   workflow_dispatch:
+    inputs:
+      panel:
+        description: 'Ревизия экрана (csot или tianma)'
+        required: true
+        default: 'csot'
+        type: choice
+        options:
+          - csot
+          - tianma
+      ui:
+        description: 'Графическая оболочка'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - plasma-desktop
+          - gnome
+          - plasma-mobile
+          - phosh
+          - none
+  push:
+    branches: [ master, main ]
   schedule:
-    - cron: '0 0 * * 5' # Start build every friday
+    - cron: '0 0 * * 5'
 
 jobs:
   build-image:
-    strategy:
-      matrix:
-        version: ["default"]
-
     runs-on: ubuntu-latest
-    steps:
-      - name: Check out build configurations
-        uses: actions/checkout@v4
+    env:
+      PANEL: ${{ github.event.inputs.panel || 'csot' }}
+      SELECTED_UI: ${{ github.event.inputs.ui || 'all' }}
 
+    steps:
       - name: Set current date variable
         run: echo "CURRENT_DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
-        
+
+      - name: Install dependencies for U-Boot and pmbootstrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git python3 python3-pip openssl \
+            gcc-aarch64-linux-gnu bison flex libssl-dev libgnutls28-dev \
+            bc device-tree-compiler python3-pyelftools uuid-dev mkbootimg
+
       - name: Create artifact directory
+        run: mkdir -p out
+
+      - name: Build U-Boot (u-boot-xiaomi-pipa.img)
         run: |
-            mkdir out
-        
-      - name: Substitute placeholders in configs
-        run: |
-           find . -type f -name "*.cfg" -exec sed -i "s|HOME|$(echo $HOME)|;s|NPROC|$(nproc)|" {} +
+          git clone --depth=1 https://source.denx.de/u-boot/u-boot.git
+          cd u-boot
+          sed -i 's/^preboot=.*$/preboot=scsi scan; part start scsi 0 userdata userdata_start; part size scsi 0 userdata userdata_size; blkmap create root; blkmap map root 0 0x${userdata_size} linear scsi 0 0x${userdata_start}/' board/qualcomm/qcom-phone.env
+          make qcom_defconfig qcom-phone.config
+          ./scripts/config --enable CONFIG_BLKMAP --enable CONFIG_CMD_BLKMAP
+          ./scripts/config --set-str CONFIG_DEFAULT_DEVICE_TREE "qcom/sm8250-xiaomi-pipa"
+          CROSS_COMPILE=aarch64-linux-gnu- make -j"$(nproc)"
+          gzip -f u-boot-nodtb.bin
+          cat u-boot-nodtb.bin.gz u-boot.dtb > u-boot-xiaomi-pipa.bin
+          mkbootimg --kernel u-boot-xiaomi-pipa.bin -o ../out/u-boot-xiaomi-pipa.img
 
       - name: Install pmbootstrap from git
         run: |
@@ -34,98 +70,72 @@ jobs:
           ln -s "$PWD/pmbootstrap/pmbootstrap.py" ~/.local/bin/pmbootstrap
           pmbootstrap --version
 
-      - name: Set up pmaports
+      - name: Initialize pmbootstrap on edge (official master)
         run: |
           echo -e '\n\n' | pmbootstrap init || true
           cd ~/.local/var/pmbootstrap/cache_git/pmaports
-          git remote
-          git remote add pipa https://github.com/rifux/pipa-pmaports.git
-          git fetch pipa v25.06
-          git reset --hard pipa/v25.06
+          git checkout master
+          git pull origin master
+          pmbootstrap config device xiaomi-pipa
+          pmbootstrap config kernel "${PANEL}"
+          pmbootstrap config user user
+          pmbootstrap config systemd default
+          pmbootstrap config jobs "$(nproc)"
+          pmbootstrap status
 
-      - name: Build the xiaomi-pipa without DE
+      - name: Build KDE Plasma Desktop
+        if: env.SELECTED_UI == 'all' || env.SELECTED_UI == 'plasma-desktop'
         run: |
-           cp xiaomi-pipa.cfg ~/.config/pmbootstrap_v3.cfg
-           pmbootstrap install --password 147147
-           pmbootstrap export
-           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-pipa.img
-           cp /tmp/postmarketOS-export/xiaomi-pipa.img out/rootfs-xiaomi-pipa-none.img
+          yes | pmbootstrap zap || true
+          pmbootstrap config ui plasma-desktop
+          pmbootstrap install --password 147147
+          pmbootstrap export
+          cp -L /tmp/postmarketOS-export/xiaomi-pipa.img "out/rootfs-xiaomi-pipa-${PANEL}-plasma-desktop.img"
 
-      - name: Breakpoint if tests failed for xiaomi-pipa without DE
-        if: failure()
-        uses: namespacelabs/breakpoint-action@v0
-        with:
-          duration: 30m
-          authorized-users: rifux
-      
-      - name: Upload artifacts xiaomi-pipa without DE
+      - name: Upload KDE Plasma Desktop + U-Boot
+        if: env.SELECTED_UI == 'all' || env.SELECTED_UI == 'plasma-desktop'
         uses: actions/upload-artifact@v4
         with:
-           name: xiaomi-pipa-none_${{ env.CURRENT_DATE }}
-           path: out/*.img*
-           retention-days: 7
+          name: xiaomi-pipa-${{ env.PANEL }}-plasma-desktop_${{ env.CURRENT_DATE }}
+          path: |
+            out/u-boot-xiaomi-pipa.img
+            out/rootfs-xiaomi-pipa-${{ env.PANEL }}-plasma-desktop.img
+          retention-days: 7
 
-      - name: Build the xiaomi-pipa with KDE Plasma Desktop
+      - name: Build GNOME
+        if: env.SELECTED_UI == 'all' || env.SELECTED_UI == 'gnome'
         run: |
-           yes | pmbootstrap zap
-           rm -r out/*
-           pmbootstrap install --password 147147 --add postmarketos-ui-plasma-desktop
-           cat /home/runner/.local/var/pmbootstrap/log.txt
-           pmbootstrap export
-           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-pipa.img
-           cp /tmp/postmarketOS-export/xiaomi-pipa.img out/rootfs-xiaomi-pipa-plasma.img
+          yes | pmbootstrap zap || true
+          pmbootstrap config ui gnome
+          pmbootstrap install --password 147147
+          pmbootstrap export
+          cp -L /tmp/postmarketOS-export/xiaomi-pipa.img "out/rootfs-xiaomi-pipa-${PANEL}-gnome.img"
 
-      - name: Breakpoint if tests failed for xiaomi-pipa with KDE Plasma Desktop
-        if: failure()
-        uses: namespacelabs/breakpoint-action@v0
-        with:
-          duration: 30m
-          authorized-users: rifux
-      
-      - name: Upload artifacts xiaomi-pipa with KDE Plasma Desktop
+      - name: Upload GNOME + U-Boot
+        if: env.SELECTED_UI == 'all' || env.SELECTED_UI == 'gnome'
         uses: actions/upload-artifact@v4
         with:
-           name: xiaomi-pipa-plasma_${{ env.CURRENT_DATE }}
-           path: out/*.img*
-           retention-days: 7
-            
-      - name: Build the xiaomi-pipa with GNOME
-        run: |
-           yes | pmbootstrap zap
-           rm -r out/*
-           pmbootstrap install --password 147147 --add postmarketos-ui-gnome
-           pmbootstrap export
-           cp /tmp/postmarketOS-export/boot.img out/boot-xiaomi-pipa.img
-           cp /tmp/postmarketOS-export/xiaomi-pipa.img out/rootfs-xiaomi-pipa-gnome.img
+          name: xiaomi-pipa-${{ env.PANEL }}-gnome_${{ env.CURRENT_DATE }}
+          path: |
+            out/u-boot-xiaomi-pipa.img
+            out/rootfs-xiaomi-pipa-${{ env.PANEL }}-gnome.img
+          retention-days: 7
 
-      - name: Breakpoint if tests failed for xiaomi-pipa with GNOME
-        if: failure()
-        uses: namespacelabs/breakpoint-action@v0
-        with:
-          duration: 30m
-          authorized-users: rifux
-            
-      - name: Upload artifacts xiaomi-pipa with GNOME
+      - name: Build Single Selected UI (plasma-mobile / phosh / none)
+        if: env.SELECTED_UI != 'all' && env.SELECTED_UI != 'plasma-desktop' && env.SELECTED_UI != 'gnome'
+        run: |
+          yes | pmbootstrap zap || true
+          pmbootstrap config ui "${SELECTED_UI}"
+          pmbootstrap install --password 147147
+          pmbootstrap export
+          cp -L /tmp/postmarketOS-export/xiaomi-pipa.img "out/rootfs-xiaomi-pipa-${PANEL}-${SELECTED_UI}.img"
+
+      - name: Upload Single Selected UI + U-Boot
+        if: env.SELECTED_UI != 'all' && env.SELECTED_UI != 'plasma-desktop' && env.SELECTED_UI != 'gnome'
         uses: actions/upload-artifact@v4
         with:
-           name: xiaomi-pipa-gnome_${{ env.CURRENT_DATE }}
-           path: out/*.img*
-           retention-days: 7
-                       
-      - name: Copy xiaomi-pipa kernel
-        run: |
-           rm -r out/*
-           cp ~/.local/var/pmbootstrap/packages/v25.06/aarch64/linux-postmarketos-qcom-sm8250-pipa-*.apk out/
-      
-      - name: Upload artifacts xiaomi-pipa kernel
-        uses: actions/upload-artifact@v4
-        with:
-           name: xiaomi-pipa-kernel_${{ env.CURRENT_DATE }}
-           path: out/*.apk
-           retention-days: 7
-
-
-
-        
-
-        
+          name: xiaomi-pipa-${{ env.PANEL }}-${{ env.SELECTED_UI }}_${{ env.CURRENT_DATE }}
+          path: |
+            out/u-boot-xiaomi-pipa.img
+            out/rootfs-xiaomi-pipa-${{ env.PANEL }}-${{ env.SELECTED_UI }}.img
+          retention-days: 7
